@@ -1,15 +1,19 @@
 #!/usr/bin/python
+#
+# flv_monitor
+# Monitors the system for any flash videos that you are watching on your
+# browser. Displays the speed and periodically copies them to a more
+# 'suitable' directory.
+#
+# Author: Ankur Dahiya <legalos.LOTR@gmail.com>
+#
+# You can get the latest version of this script from
+# https://github.com/legalosLOTR/flv_monitor
 
 import subprocess
 import sys
 from threading import Timer
 import time
-
-last_filename = ""
-last_filesize = 0
-last_save_filesize = 0
-last_time = 0
-ewma_speed = 0
 
 EWMA_A = 0.8
 EWMA_B = 0.2
@@ -22,57 +26,60 @@ def print_on_same_line(string):
     sys.stdout.write("\r" + string)
     sys.stdout.flush()
 
+class flv_video():
+    file_name = ""
+    last_size = 0
+    last_save_size = 0
+    last_time = 0
+    ewma_speed = 0
+
 def poll():
-    global last_filename
-    global last_filesize
-    global last_save_filesize
-    global TIME_SLICE
-    global COPY_THRESH
-    global last_time
-    global ewma_speed
     global EWMA_A
     global EWMA_B
+    global TIME_SLICE
+    global COPY_THRESH
 
-    p = subprocess.Popen('lsof | grep deleted | grep Flash', shell=True, stdout=subprocess.PIPE)
-    p.wait()
-    out = p.stdout.readline()
-    time_difference = (time.time() - last_time)
-    last_time = time.time()
+    fileHash = {}
+    while True:
+        p = subprocess.Popen('lsof | grep deleted | grep /tmp/Flash', shell=True, stdout=subprocess.PIPE)
+        p.wait()
+        found_file = False
+        
+        for line in p.stdout:
+            found_file = True
+            file_data = line.split()
+            file_name = file_data[8]
+            
+            if (file_name not in fileHash):
+                flv = flv_video()
+                flv.file_name = file_data[8]
+                fileHash[file_name] = flv
+            else:
+                flv = fileHash[file_data[8]]
 
-    if (len(out) == 0):
-        print "No file found! Exiting..."
-        sys.exit()
-    out_data = out.split()
-    cur_filename = out_data[8]
-    cur_filesize = int(out_data[6])
+            cur_size = int(file_data[6])
+            data_transfered = cur_size - flv.last_size
+            time_difference = time.time() - flv.last_time
+            flv.last_time = time.time()
+            
+            speed = (data_transfered / time_difference) / 1024
+            flv.ewma_speed = speed * EWMA_A + flv.ewma_speed * EWMA_B
 
-    if (len(last_filename) == 0):
-        last_filename = cur_filename
-    
-    if (last_filename != cur_filename):
-        print "File lost or a new file became the top result! Exiting..."
-        sys.exit()
+            print flv.file_name + "\t" + str(cur_size / \
+                (1024 * 1024)) + "MiB done\t" + ("%.2f" % flv.ewma_speed) \
+                + "KiB/s\t\t"
 
-    data_transfered = cur_filesize - last_filesize
-    last_filesize = cur_filesize
+            if ((cur_size - flv.last_save_size) > COPY_THRESH):
+                copy_file(file_data)
+                flv.last_save_size = cur_size
+        
+            flv.last_size = cur_size
 
-    #print "data trans=", data_transfered
-    #print "time_difference=", time_difference
-    speed = (data_transfered / time_difference) / 1024
-    ewma_speed = speed * EWMA_A + ewma_speed * EWMA_B
+        if (not found_file):
+            print "No files found! Exiting..."
 
-    print_on_same_line(cur_filename + "\t" + str(cur_filesize / (1024 * 1024)) + "MiB done\t" + ("%.2f" % ewma_speed) + "KiB/s\t\t")
-
-    if (data_transfered == 0):
-        print "No data transfered in last slice! Exiting..."
-        copy_file(out_data)
-        sys.exit()
-
-    if ((cur_filesize - last_save_filesize) > COPY_THRESH):
-        copy_file(out_data)
-        last_save_filesize = cur_filesize
-
-    Timer(TIME_SLICE, poll).start()
+        print ""
+        time.sleep(TIME_SLICE)
 
 def copy_file(out_data):
     #return
@@ -84,4 +91,5 @@ def copy_file(out_data):
     p = subprocess.Popen('cp /proc/' + pid + '/fd/' + fd_num + " " + DEST_DIR + file_name, shell=True)
     p.wait()
 
-poll()
+if (__name__ == "__main__"):
+    poll()
